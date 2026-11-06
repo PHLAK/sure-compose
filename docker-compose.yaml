@@ -1,0 +1,108 @@
+services:
+
+  sure-web:
+    image: ghcr.io/we-promise/sure:${SURE_VERSION:-stable}
+    env_file: environment.d/sure.env
+    environment: &sure-environment
+      SELF_HOSTED: true
+      SECRET_KEY_BASE: ${SURE_SECRET_KEY_BASE}
+      DB_HOST: ${DATABASE_HOST:-database}
+      DB_PORT: ${DATABASE_PORT:-5432}
+      POSTGRES_USER: ${DATABASE_USER:-sure}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+      POSTGRES_DB: ${DATABASE_NAME:-sure}
+      REDIS_URL: redis://${CACHE_HOST:-cache}:${CACHE_PORT:-6379}/1
+    ports:
+      - ${SURE_PORT:-3000}:3000
+    volumes:
+      - ${SURE_VOLUME:-sure-data}:/rails/storage
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      database:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+    labels:
+      com.centurylinklabs.watchtower.scope: ${COMPOSE_PROJECT_NAME}
+    restart: unless-stopped
+
+  sure-worker:
+    image: ghcr.io/we-promise/sure:${SURE_VERSION:-stable}
+    env_file: environment.d/sure.env
+    environment:
+      <<: *sure-environment
+    volumes:
+      - ${SURE_VOLUME:-sure-data}:/rails/storage
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      database:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+    command: bundle exec sidekiq
+    labels:
+      com.centurylinklabs.watchtower.scope: ${COMPOSE_PROJECT_NAME}
+    restart: unless-stopped
+
+  database:
+    image: postgres:${POSTGRES_VERSION:-18}
+    env_file: environment.d/postgres.env
+    environment:
+      POSTGRES_DB: ${DATABASE_NAME:-sure}
+      POSTGRES_USER: ${DATABASE_USER:-sure}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+    volumes:
+      - ${DATABASE_VOLUME:-postgres-data}:/var/lib/postgresql
+      - /etc/localtime:/etc/localtime:ro
+    healthcheck:
+      test: ['CMD', 'pg_isready', '-d', '${DATABASE_NAME:-sure}', '-U', '${DATABASE_USER:-sure}']
+    labels:
+      com.centurylinklabs.watchtower.scope: ${COMPOSE_PROJECT_NAME}
+    restart: unless-stopped
+
+  cache:
+    image: valkey/valkey:${VALKEY_VERSION:-9}
+    volumes:
+      - ${CACHE_VOLUME:-valkey-data}:/data
+      - /etc/localtime:/etc/localtime:ro
+    labels:
+      com.centurylinklabs.watchtower.scope: ${COMPOSE_PROJECT_NAME}
+    healthcheck:
+      test: ['CMD', 'valkey-cli', 'ping']
+    restart: unless-stopped
+
+  database-backups:
+    image: prodrigestivill/postgres-backup-local:${POSTGRES_BACKUP_VERSION:-${POSTGRES_VERSION:-18}}
+    env_file: environment.d/database-backups.env
+    environment:
+      POSTGRES_HOST: ${DATABASE_HOST:-database}
+      POSTGRES_PORT: ${DATABASE_PORT:-5432}
+      POSTGRES_DB: ${DATABASE_NAME:-sure}
+      POSTGRES_USER: ${DATABASE_USER:-sure}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+      POSTGRES_EXTRA_OPTS: '-Z1 --clean --if-exists'
+      BACKUP_DIR: /backups
+    volumes:
+      - ${DATABASE_BACKUPS_VOLUME:-./backups}:/backups
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      database:
+        condition: service_healthy
+    restart: unless-stopped
+
+  watchtower:
+    image: nickfedor/watchtower:${WATCHTOWER_VERSION:-latest}
+    env_file: environment.d/watchtower.env
+    environment:
+      WATCHTOWER_SCOPE: ${COMPOSE_PROJECT_NAME}
+    volumes:
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - /etc/localtime:/etc/localtime:ro
+    labels:
+      com.centurylinklabs.watchtower.scope: ${COMPOSE_PROJECT_NAME}
+    restart: unless-stopped
+
+volumes:
+  sure-data: {}
+  postgres-data: {}
+  valkey-data: {}
